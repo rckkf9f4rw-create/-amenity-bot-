@@ -1,5 +1,3 @@
-📋 **【貼り付けるコード（タップしてコピー）】**
-```python
 #!/usr/bin/env python3
 import os
 import time
@@ -9,19 +7,16 @@ import threading
 import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# 南口さんのDiscord Webhook URL
 DISCORD_WEBHOOK_URL = os.environ.get(
     "DISCORD_WEBHOOK_URL",
     "https://discord.com/api/webhooks/1570755612592050256/yhuZMjrz1sJdhyhRgOxXYDTtBHhiAcIszVAmsnvjODyl7NZ8_ZdnozNZKHQA0Z4J4XXV"
 )
 
-# 監視対象（アメドリ通販部）
 TARGET_URLS = [
-    "https://www.amenitydream.com/phone/product-group/49",   # パック・BOX
-    "https://www.amenitydream.com/phone/product-list/1265",  # ポケモンカード
+    "https://www.amenitydream.com/phone/product-group/49",
+    "https://www.amenitydream.com/phone/product-list/1265",
 ]
 
-# 監視キーワード
 WATCH_KEYWORDS = [
     "30th", "ハドウシーカー", "ストームエメラルダ", "神の支配", 
     "ヒロインズ", "世界最強の戦士", "ワンピース", "スペシャルデッキセット",
@@ -29,7 +24,6 @@ WATCH_KEYWORDS = [
     "box", "ブースター"
 ]
 
-# 監視間隔（秒）
 CHECK_INTERVAL_SECONDS = 15
 
 HEADERS = {
@@ -138,4 +132,3 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
     server.serve_forever()
-```
