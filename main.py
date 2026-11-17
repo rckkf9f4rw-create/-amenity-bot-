@@ -1,10 +1,21 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Render 側監視Bot（アメドリ＋カードラボ＋ホビステ）v2
+# 2026-11-17 MacBook監視Bot v6 に合わせて更新:
+#   - 新弾 2作品のキーワード判定を追加（誤検知防止込み・NFKC正規化）
+#       DB FW 『STORY BOOSTER 02 [ST02]』(2027/01/16)
+#       遊戯王OCG『RARITY COLLECTION -CLIMAX SCENE EDITION-』(2027/02/27)
+#   - アメドリ・カードラボの検索に新弾 2本を追加（1周期1本のローテーションで
+#     リクエスト数は増やしすぎない）
+#   - 1パック売り・シングル・サプライの除外語を強化
 import os
 import time
 import json
 import re
 import html
 import threading
+import unicodedata
 import urllib.request
 import urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -19,7 +30,46 @@ WATCH_KEYWORDS = [
     "30th", "セレブレーション", "メガブレイブ", "メガシンフォニア", "テラスタルフェス",
     "アビスアイ", "メガドリーム", "インフェルノ",
     "神の支配", "east blue", "イーストブルー", "ヒロインズ", "世界最強の戦士",
+    # --- 2027年新弾の「強いキーワード」
+    "ストーリーブースター", "クライマックスシーン", "クライマックス・シーン",
 ]
+
+# 強いキーワード = それだけで本命 / 弱いキーワード = 作品名の文脈必須
+NEW_TITLE_RULES = [
+    {
+        "label": "DB FW STORY BOOSTER 02 [ST02]",
+        "strong": ["storybooster02", "ストーリーブースター02"],
+        "weak": {"st02": ("ドラゴンボール", "フュージョンワールド", "story")},
+    },
+    {
+        "label": "遊戯王 RARITY COLLECTION -CLIMAX SCENE EDITION-",
+        "strong": ["climaxscene", "クライマックスシーン"],
+        "weak": {"rc05": ("遊戯王", "rarity", "レアリティ")},
+    },
+]
+
+_NORM_DROP = re.compile(r"[\s\u3000\-_\u2010\u2011\u2012\u2013\u2014\u2015\u30fb\uff65\uff0d]")
+
+
+def norm_title(s):
+    """全角/半角・大文字小文字・スペース・ハイフン・中黒の揺れを吸収"""
+    s = unicodedata.normalize("NFKC", s or "").lower()
+    return _NORM_DROP.sub("", s)
+
+
+def new_title_hit(name):
+    t = norm_title(name)
+    if not t:
+        return None
+    for rule in NEW_TITLE_RULES:
+        for kw in rule["strong"]:
+            if norm_title(kw) in t:
+                return rule["label"]
+        for kw, ctx in rule["weak"].items():
+            if norm_title(kw) in t and any(norm_title(c) in t for c in ctx):
+                return rule["label"]
+    return None
+
 
 CHECK_INTERVAL_SECONDS = 15
 
@@ -76,8 +126,14 @@ def send_discord_alert(product):
 
 def matches_target(name):
     nl = name.lower()
-    if any(x in nl for x in ["サプライ", "スリーブ", "デッキケース", "プレイマット", "ロングカードボックス", "太陽神の支配", "スタートデッキ", "スペシャルデッキセット"]):
+    if any(x in nl for x in ["サプライ", "スリーブ", "デッキケース", "プレイマット", "ロングカードボックス",
+                             "太陽神の支配", "スタートデッキ", "スペシャルデッキセット",
+                             "1パック", "バラパック", "シングルカード", "オリパ",
+                             "カードファイル", "バインダー", "カードローダー", "トレーディングカード用品"]):
         return False
+    # 2027年新弾（弱いキーワードは作品名の文脈必須）
+    if new_title_hit(name):
+        return True
     if any(kw.lower() in nl for kw in WATCH_KEYWORDS):
         return True
     if ("ポケモン" in nl or "ポケカ" in nl) and ("box" in nl or "拡張パック" in nl):
@@ -96,11 +152,23 @@ AMENITY_URLS = [
     "https://www.amenitydream.com/product-list?keyword=%E7%A5%9E%E3%81%AE%E6%94%AF%E9%85%8D",
 ]
 
+# 2027年新弾の検索（1周期1本ずつローテーション。総リクエスト数はほぼ増えない）
+AMENITY_ROTATING_URLS = [
+    "https://www.amenitydream.com/product-list?keyword=" + urllib.parse.quote("ストーリーブースター"),
+    "https://www.amenitydream.com/product-list?keyword=" + urllib.parse.quote("クライマックスシーン"),
+]
+amenity_rotate_index = 0
+
 
 def check_amenity_dream():
+    global amenity_rotate_index
     products = []
     seen_ids = set()
-    for target_url in AMENITY_URLS:
+    targets = list(AMENITY_URLS)
+    if AMENITY_ROTATING_URLS:
+        targets.append(AMENITY_ROTATING_URLS[amenity_rotate_index % len(AMENITY_ROTATING_URLS)])
+        amenity_rotate_index = (amenity_rotate_index + 1) % len(AMENITY_ROTATING_URLS)
+    for target_url in targets:
         try:
             req = urllib.request.Request(target_url, headers=HEADERS)
             with urllib.request.urlopen(req, timeout=8) as resp:
@@ -146,9 +214,13 @@ CLABO_DIRECT_URLS = [
 ]
 
 CLABO_SEARCH_QUERIES = ["30th CELEBRATION", "ハドウシーカー", "EAST BLUE", "神の支配"]
+# 2027年新弾（1周期1本のローテーション）
+CLABO_ROTATING_QUERIES = ["ストーリーブースター", "クライマックスシーン"]
+clabo_rotate_index = 0
 
 
 def check_clabo():
+    global clabo_rotate_index
     products = []
     seen_ids = set()
     for code, fallback_name in CLABO_DIRECT_URLS:
@@ -174,7 +246,8 @@ def check_clabo():
         except Exception as e:
             print(f"[{time.strftime('%H:%M:%S')}] カードラボ直ページエラー ({code}): {e}")
 
-    for q in CLABO_SEARCH_QUERIES:
+    for q in CLABO_SEARCH_QUERIES + ([CLABO_ROTATING_QUERIES[clabo_rotate_index % len(CLABO_ROTATING_QUERIES)]]
+                                     if CLABO_ROTATING_QUERIES else []):
         url = f"https://www.c-labo-online.jp/product-list?keyword={urllib.parse.quote(q)}"
         try:
             req = urllib.request.Request(url, headers=HEADERS)
@@ -205,12 +278,16 @@ def check_clabo():
                     })
         except Exception as e:
             print(f"[{time.strftime('%H:%M:%S')}] カードラボ検索エラー ({q}): {e}")
+    if CLABO_ROTATING_QUERIES:
+        clabo_rotate_index = (clabo_rotate_index + 1) % len(CLABO_ROTATING_QUERIES)
     return products
 
 
 HOBISTORE_QUERIES = [
     "ハドウシーカー", "ストームエメラルダ", "ムニキスゼロ", "ニンジャスピナー",
     "30th", "神の支配", "EAST BLUE", "ポケモンカード BOX", "ワンピース BOX",
+    # 2027年新弾
+    "ストーリーブースター", "クライマックスシーン",
 ]
 
 
